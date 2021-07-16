@@ -90,11 +90,14 @@
     #include <SystemFont5x7.h>
   #elif defined(DRV_DISP_ADAGFX_SSD1306)
     // https://github.com/adafruit/Adafruit_SSD1306
-    #include <Adafruit_SSD1306.h>
-    // TODO: Select either SPI or I2C. For now, assume SPI
-    #include <SPI.h>
-    #include <Wire.h>
     #define DRV_COLORMODE_MONO // Monochrome display
+    #include <Adafruit_SSD1306.h>
+    #if !defined(DRV_DISP_ADAGFX_SSD1306_I2C)
+      // defaults to SPI mode for backward compatibility
+      #define DRV_DISP_ADAGFX_SSD1306_SPI 
+      #include <SPI.h>
+      #include <Wire.h>
+    #endif
   #elif defined(DRV_DISP_ADAGFX_ST7735)
     // https://github.com/adafruit/Adafruit-ST7735-Library
     #include <Adafruit_ST7735.h>
@@ -188,12 +191,24 @@
   #elif (GSLC_SD_EN == 2)
     // Use greiman/SdFat library
     // - Supports SW SPI
-    // - Recommend usage of SdFat library version 1.0.1
+    #include <SdFat.h>
+    #if (SD_FAT_VERSION >= 20003)
+    // For SdFat v2.0.3 onwards, we can detect the SdFat version and
+    // use the new software SPI instantiation.
+    // - To support SW SPI interface, need to make mod to SdFat lib:
+    // -   Arduino\libraries\SdFat\src\SdFatConfig.h:
+    // -     #define SPI_DRIVER_SELECT 2 // Change default from 0 to 2
+    SoftSpiDriver<12, 11, 13> softSpi; // FIXME: Add configurability
+    #define SD_CONFIG SdSpiConfig(ADAGFX_PIN_SDCS, DEDICATED_SPI, SD_SCK_MHZ(0), &softSpi)
+    SdFat SD;
+    #else
+    // Seems we are running an older version of SdFat (ie. v1.x)
+    // - Recommend usage of SdFat library version v1.0.1
     // - To support SW SPI interface, need to make mod to SdFat lib:
     // -   Arduino\libraries\SdFat\src\SdFatConfig.h:
     // -     #define ENABLE_SOFTWARE_SPI_CLASS 1 // Change default from 0 to 1
-    #include <SdFat.h>
     SdFatSoftSpi<12, 11, 13> SD; // FIXME: Add configurability
+    #endif
   #endif
 #endif
  
@@ -292,7 +307,7 @@ extern "C" {
 // ------------------------------------------------------------------------
 #elif defined(DRV_DISP_ADAGFX_ILI9488_JB)
   #if (ADAGFX_SPI_HW) // Use hardware SPI or software SPI (with custom pins)
-    const char* m_acDrvDisp = "ILI9348_JB(SPI-HW)";
+    const char* m_acDrvDisp = "ILI9488_JB(SPI-HW)";
     ILI9488 m_disp = ILI9488(ADAGFX_PIN_CS, ADAGFX_PIN_DC, ADAGFX_PIN_RST);
   #else
     const char* m_acDrvDisp = "ILI9488_JB(SPI-SW)";
@@ -305,14 +320,24 @@ extern "C" {
   ILI9341_due m_disp = ILI9341_due(ADAGFX_PIN_CS, ADAGFX_PIN_DC, ADAGFX_PIN_RST);
 
 // ------------------------------------------------------------------------
-#elif defined(DRV_DISP_ADAGFX_SSD1306)
-  #if (ADAGFX_SPI_HW) // Use hardware SPI or software SPI (with custom pins)
+#elif defined(DRV_DISP_ADAGFX_SSD1306_SPI)
+  #ifndef DRV_DISP_ADAGFX_SSD1306_INIT
+    // Provide backward compatibility in case user config
+    // doesn't provide initialization options
+    #define DRV_DISP_ADAGFX_SSD1306_INIT 128,32
+  #endif
+
+  #if (ADAGFX_SPI_HW) //  Use hardware SPI or software SPI (with custom pins)
     const char* m_acDrvDisp = "ADA_SSD1306(SPI-HW)";
-    Adafruit_SSD1306 m_disp(ADAGFX_PIN_DC, ADAGFX_PIN_RST, ADAGFX_PIN_CS);
+    Adafruit_SSD1306 m_disp(DRV_DISP_ADAGFX_SSD1306_INIT,&SPI,ADAGFX_PIN_DC, ADAGFX_PIN_RST, ADAGFX_PIN_CS);
   #else
     const char* m_acDrvDisp = "ADA_SSD1306(SPI-SW)";
-    Adafruit_SSD1306 m_disp(ADAGFX_PIN_MOSI, ADAGFX_PIN_CLK, ADAGFX_PIN_DC, ADAGFX_PIN_RST, ADAGFX_PIN_CS);
+    Adafruit_SSD1306 m_disp(DRV_DISP_ADAGFX_SSD1306_INIT,ADAGFX_PIN_MOSI, ADAGFX_PIN_CLK, ADAGFX_PIN_DC, ADAGFX_PIN_RST, ADAGFX_PIN_CS);
   #endif
+
+#elif defined(DRV_DISP_ADAGFX_SSD1306_I2C)
+    const char* m_acDrvDisp = "ADA_SSD1306(I2C)";
+    Adafruit_SSD1306 m_disp(DRV_DISP_ADAGFX_SSD1306_INIT,&Wire,ADAGFX_PIN_RST);
 
 // ------------------------------------------------------------------------
 #elif defined(DRV_DISP_ADAGFX_ST7735)
@@ -500,8 +525,13 @@ extern "C" {
 // ------------------------------------------------------------------------
 #elif defined(DRV_TOUCH_XPT2046_PS)
   const char* m_acDrvTouch = "XPT2046_PS(SPI-HW)";
-  // Use SPI, no IRQs
-  XPT2046_Touchscreen m_touch(XPT2046_CS); // Chip Select pin
+  #if defined(XPT2046_IRQ)
+    // Use SPI, with IRQs
+    XPT2046_Touchscreen m_touch(XPT2046_CS, XPT2046_IRQ); // Chip Select pin, IRQ pin
+  #else
+    // Use SPI, no IRQs
+    XPT2046_Touchscreen m_touch(XPT2046_CS); // Chip Select pin
+  #endif  
   #define DRV_TOUCH_INSTANCE
 // ------------------------------------------------------------------------
 #elif defined(DRV_TOUCH_URTOUCH)
@@ -629,9 +659,14 @@ bool gslc_DrvInit(gslc_tsGui* pGui)
     #elif defined(DRV_DISP_ADAGFX_ILI9488_JB)
       m_disp.begin();
 	  
-    #elif defined(DRV_DISP_ADAGFX_SSD1306)
+    #elif defined(DRV_DISP_ADAGFX_SSD1306_SPI)
       m_disp.begin(SSD1306_SWITCHCAPVCC);
-
+    #elif defined(DRV_DISP_ADAGFX_SSD1306_I2C)
+      #if defined(DRV_DISP_ADAGFX_SSD1306_I2C_ADDR)
+        m_disp.begin(SSD1306_SWITCHCAPVCC,DRV_DISP_ADAGFX_SSD1306_I2C_ADDR);
+      #else
+        m_disp.begin(SSD1306_SWITCHCAPVCC); //use the default I2C ADDR
+      #endif
     #elif defined(DRV_DISP_ADAGFX_ST7735)
 
       // ST7735 requires additional initialization depending on
@@ -727,9 +762,14 @@ bool gslc_DrvInit(gslc_tsGui* pGui)
 
 
     // Initialize SD card usage
-    #if (GSLC_SD_EN)
+    #if (GSLC_SD_EN == 1)
     if (!SD.begin(ADAGFX_PIN_SDCS)) {
       GSLC_DEBUG_PRINT("ERROR: DrvInit() SD init failed\n",0);
+      return false;
+    }
+    #elif (GSLC_SD_EN == 2)
+    if (!SD.begin(SD_CONFIG)) {
+      GSLC_DEBUG_PRINT("ERROR: DrvInit() SD(Soft) init failed\n",0);
       return false;
     }
     #endif
@@ -1986,9 +2026,9 @@ void gslc_DrvDrawBmp24FromSD(gslc_tsGui* pGui,const char *filename, uint16_t x, 
 bool gslc_DrvDrawImage(gslc_tsGui* pGui,int16_t nDstX,int16_t nDstY,gslc_tsImgRef sImgRef)
 {
   #if defined(DBG_DRIVER)
-  char addr[6];
+  char addr[9];
   GSLC_DEBUG_PRINT("DBG: DrvDrawImage() with ImgBuf address=","");
-  sprintf(addr,"%04X",(unsigned int)sImgRef.pImgBuf);
+  sprintf(addr,"%08X",(unsigned int)sImgRef.pImgBuf);
   GSLC_DEBUG_PRINT("%s\n",addr);
   #endif
 
@@ -2153,6 +2193,14 @@ bool gslc_DrvGetTouch(gslc_tsGui* pGui,int16_t* pnX,int16_t* pnY,uint16_t* pnPre
   // the touch handler may interfere with displays that share pins.
   #define FIX_4WIRE_PIN_STATE // Comment out to disable
 
+  // For ESP32 devices, a workaround is required for the
+  // Adafruit_TouchScreen since it makes an assumption that
+  // the ADC resolution is 10-bit. This workaround enables the
+  // Adafruit library to operate the same was as for AVR devices.
+  #if defined(ESP32)
+    #define FIX_4WIRE_ADC_10 // Comment out to disable
+  #endif
+
   // --------------------------------------------------------------------------
 
   // Disable certain workarounds for Adafruit_TouchScreen for certain devices
@@ -2248,12 +2296,21 @@ bool gslc_TDrvInitTouch(gslc_tsGui* pGui,const char* acDev) {
   (void)acDev; // Unused
 
   // Capture default calibration settings for resistive displays
-  #if defined(DRV_TOUCH_TYPE_RES)
+  #if defined(DRV_TOUCH_CALIB)
     pGui->nTouchCalXMin = ADATOUCH_X_MIN;
     pGui->nTouchCalXMax = ADATOUCH_X_MAX;
     pGui->nTouchCalYMin = ADATOUCH_Y_MIN;
     pGui->nTouchCalYMax = ADATOUCH_Y_MAX;
-  #endif // DRV_TOUCH_TYPE_RES
+    #if defined(ADATOUCH_PRESS_MIN)
+      pGui->nTouchCalPressMin = ADATOUCH_PRESS_MIN;
+      pGui->nTouchCalPressMax = ADATOUCH_PRESS_MAX;
+    #else
+      // For backward compatibility, if these config settings
+      // were not included in the config file, provide defaults.
+      pGui->nTouchCalPressMin = 200;
+      pGui->nTouchCalPressMax = 4000;
+    #endif
+  #endif // DRV_TOUCH_CALIB
 
   // Support touch controllers with swapped X & Y
   #if defined(ADATOUCH_REMAP_YX)
@@ -2288,6 +2345,16 @@ bool gslc_TDrvInitTouch(gslc_tsGui* pGui,const char* acDev) {
     m_touch.setTouchLimit(1);
     return true;
   #elif defined(DRV_TOUCH_ADA_SIMPLE)
+    #if defined(ESP32)
+      // ESP32 defaults to 12-bit resolution whereas Adafruit_Touchscreen
+      // hardcodes a 10-bit range. Workaround for now is to change the
+      // ADC resolution to 10-bit.
+      // References:
+      // - https://github.com/adafruit/Adafruit_TouchScreen/issues/15
+      #if defined(FIX_4WIRE_ADC_10)
+        analogReadResolution(10);
+      #endif // FIX_4WIRE_ADC_10
+    #endif
     return true;
   #elif defined(DRV_TOUCH_XPT2046_STM)
     m_touch.begin();
@@ -2500,7 +2567,7 @@ bool gslc_TDrvGetTouch(gslc_tsGui* pGui,int16_t* pnX,int16_t* pnY,uint16_t* pnPr
   // - small: If touch active and hard
   // - large: If touch active and soft
   // Note that the "pressure" (z) value is inverted in interpretation
-  if ((p.z > ADATOUCH_PRESS_MIN) && (p.z < ADATOUCH_PRESS_MAX)) {
+  if ((p.z > pGui->nTouchCalPressMin) && (p.z < pGui->nTouchCalPressMax)) {
     nRawX = p.x;
     nRawY = p.y;
     nRawPress = p.z;
@@ -2553,7 +2620,7 @@ bool gslc_TDrvGetTouch(gslc_tsGui* pGui,int16_t* pnX,int16_t* pnY,uint16_t* pnPr
       // once we are done with our polling.
       uint16_t nPressCur = m_touch.pressure();
 
-      if ((nPressCur > ADATOUCH_PRESS_MIN) && (nPressCur < ADATOUCH_PRESS_MAX)) {
+      if ((nPressCur > pGui->nTouchCalPressMin) && (nPressCur < pGui->nTouchCalPressMax)) {
         // The unfiltered result is that the display is still pressed
         // Therefore we are likely in case (b) and should return our
         // last saved result (with touch pressure still active)
@@ -2613,7 +2680,7 @@ bool gslc_TDrvGetTouch(gslc_tsGui* pGui,int16_t* pnX,int16_t* pnY,uint16_t* pnPr
 
     TS_Point p = m_touch.getPoint();
 
-    if ((p.z > ADATOUCH_PRESS_MIN) && (p.z < ADATOUCH_PRESS_MAX)) {
+    if ((p.z > pGui->nTouchCalPressMin) && (p.z < pGui->nTouchCalPressMax)) {
       nRawX = p.x;
       nRawY = p.y;
       nRawPress = p.z;
@@ -2643,7 +2710,7 @@ bool gslc_TDrvGetTouch(gslc_tsGui* pGui,int16_t* pnX,int16_t* pnY,uint16_t* pnPr
 
     TS_Point p = m_touch.getPoint();
 
-    if ((p.z > ADATOUCH_PRESS_MIN) && (p.z < ADATOUCH_PRESS_MAX)) {
+    if ((p.z > pGui->nTouchCalPressMin) && (p.z < pGui->nTouchCalPressMax)) {
       // PaulStoffregen/XPT2046 appears to use a different orientation
       // than other libraries. Therefore, we will remap it here
       // to match the default portrait orientation.
@@ -2845,17 +2912,32 @@ bool gslc_TDrvGetTouch(gslc_tsGui* pGui,int16_t* pnX,int16_t* pnY,uint16_t* pnPr
     if ((nButtonsLast & TFTSHIELD_BUTTON_UP) && !(nButtonsCur & TFTSHIELD_BUTTON_UP)) {
       *peInputEvent = GSLC_INPUT_PIN_ASSERT;
       *pnInputVal = GSLC_PIN_BTN_UP;
+    } else if (!(nButtonsLast & TFTSHIELD_BUTTON_UP) && (nButtonsCur & TFTSHIELD_BUTTON_UP)) {
+      *peInputEvent = GSLC_INPUT_PIN_DEASSERT;
+      *pnInputVal = GSLC_PIN_BTN_UP;
     } else if ((nButtonsLast & TFTSHIELD_BUTTON_DOWN) && !(nButtonsCur & TFTSHIELD_BUTTON_DOWN)) {
       *peInputEvent = GSLC_INPUT_PIN_ASSERT;
+      *pnInputVal = GSLC_PIN_BTN_DOWN;
+    } else if (!(nButtonsLast & TFTSHIELD_BUTTON_DOWN) && (nButtonsCur & TFTSHIELD_BUTTON_DOWN)) {
+      *peInputEvent = GSLC_INPUT_PIN_DEASSERT;
       *pnInputVal = GSLC_PIN_BTN_DOWN;
     } else if ((nButtonsLast & TFTSHIELD_BUTTON_LEFT) && !(nButtonsCur & TFTSHIELD_BUTTON_LEFT)) {
       *peInputEvent = GSLC_INPUT_PIN_ASSERT;
       *pnInputVal = GSLC_PIN_BTN_LEFT;
+    } else if (!(nButtonsLast & TFTSHIELD_BUTTON_LEFT) && (nButtonsCur & TFTSHIELD_BUTTON_LEFT)) {
+      *peInputEvent = GSLC_INPUT_PIN_DEASSERT;
+      *pnInputVal = GSLC_PIN_BTN_LEFT;
     } else if ((nButtonsLast & TFTSHIELD_BUTTON_RIGHT) && !(nButtonsCur & TFTSHIELD_BUTTON_RIGHT)) {
       *peInputEvent = GSLC_INPUT_PIN_ASSERT;
       *pnInputVal = GSLC_PIN_BTN_RIGHT;
+    } else if (!(nButtonsLast & TFTSHIELD_BUTTON_RIGHT) && (nButtonsCur & TFTSHIELD_BUTTON_RIGHT)) {
+      *peInputEvent = GSLC_INPUT_PIN_DEASSERT;
+      *pnInputVal = GSLC_PIN_BTN_RIGHT;
     } else if ((nButtonsLast & TFTSHIELD_BUTTON_IN) && !(nButtonsCur & TFTSHIELD_BUTTON_IN)) {
       *peInputEvent = GSLC_INPUT_PIN_ASSERT;
+      *pnInputVal = GSLC_PIN_BTN_SEL;
+    } else if (!(nButtonsLast & TFTSHIELD_BUTTON_IN) && (nButtonsCur & TFTSHIELD_BUTTON_IN)) {
+      *peInputEvent = GSLC_INPUT_PIN_DEASSERT;
       *pnInputVal = GSLC_PIN_BTN_SEL;
     }
     // Save button state so that transitions can be detected
@@ -2896,7 +2978,7 @@ bool gslc_TDrvGetTouch(gslc_tsGui* pGui,int16_t* pnX,int16_t* pnY,uint16_t* pnPr
     nInputY = nRawY;
 
     // For resistive displays, perform constraint and scaling
-    #if defined(DRV_TOUCH_TYPE_RES)
+    #if defined(DRV_TOUCH_CALIB)
       if (pGui->bTouchRemapEn) {
         // Perform scaling from input to output
         // - Calibration done in native orientation (GSLC_ROTATE=0)
@@ -2924,14 +3006,14 @@ bool gslc_TDrvGetTouch(gslc_tsGui* pGui,int16_t* pnX,int16_t* pnY,uint16_t* pnPr
       // No scaling from input to output
       nOutputX = nInputX;
       nOutputY = nInputY;
-    #endif  // DRV_TOUCH_TYPE_RES
+    #endif  // DRV_TOUCH_CALIB
   
     #ifdef DBG_TOUCH
     GSLC_DEBUG_PRINT("DBG: PreRotate: x=%u y=%u\n", nOutputX, nOutputY);
-    #if defined(DRV_TOUCH_TYPE_RES)
+    #if defined(DRV_TOUCH_CALIB)
       GSLC_DEBUG_PRINT("DBG: RotateCfg: remap=%u nSwapXY=%u nFlipX=%u nFlipY=%u\n",
         pGui->bTouchRemapEn,pGui->nSwapXY,pGui->nFlipX,pGui->nFlipY);
-    #endif // DRV_TOUCH_TYPE_RES
+    #endif // DRV_TOUCH_CALIB
     #endif // DBG_TOUCH
 
     // Perform remapping due to current orientation
